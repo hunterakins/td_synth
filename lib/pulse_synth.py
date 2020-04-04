@@ -223,52 +223,67 @@ class PulseSynth:
         self.env.freq = 10000
         self.env.run_model('bellhop', folder, fname, beam=beam)
         arrivals, pos = read_arrivals_asc(folder+fname)
+        ns = pos.s.depth.size
+        nr = pos.r.depth.size *pos.r.range.size
         """
         Compute maximum channel spread to make sure my waveform doesn't
         get clipped
         """
-        num_sources = len(arrivals)
-        arrs = arrivals[1] # disregard the first one it corresponds to first range step
-        position = index_to_pos(1, pos)
-        print(position)
-        num_arrivals = len(arrs)
-        delays  = [x[1].real for x in arrs]
-        spread = np.max(delays) - np.min(delays)
-        """ Compute the stretched signals """
-        stretched_sigs = []
-        max_sig_N = 0
-        for j in range(num_arrivals):
-            arr = arrs[j]
-            amp = arr[0]
-            delay = arr[1].real
-            src_angle = arr[2]
-            print('src_angle', src_angle)
-            proj_vel = vs*np.cos(np.pi*src_angle/180)
-            sig = self.tdpulse.stretch_signal(proj_vel)
-            sig_N = sig.size
-            """
-            Signals may be zero padded extra to ensure no wraparound
-            in the chirp z-transform, so make sure we have space
-            """
-            if sig_N > max_sig_N:
-                max_sig_N = sig_N
-            stretched_sigs.append(sig)
+        spread = 0
+        stretch_sig_list = []
+        for i in range(nr):
+            arrs = arrivals[i]
+            position = index_to_pos(i, pos)
+            print(position)
+            num_arrivals = len(arrs)
+            delays  = [x[1].real for x in arrs] # delay is the second element
+            if i == 0:
+                tmin = np.min(delays)
+                tmax = np.max(delays)
+            else:
+                if np.min(delays) < tmin:
+                    tmin = np.min(delays)
+                if np.max(delays) > tmax:
+                    tmax = np.max(delays)
+            """ Compute the stretched signals """
+            stretched_sigs = []
+            max_sig_N = 0
+            for j in range(num_arrivals):
+                arr = arrs[j]
+                amp = arr[0]
+                delay = arr[1].real
+                src_angle = arr[2]
+                proj_vel = vs*np.cos(np.pi*src_angle/180)
+                sig = amp*self.tdpulse.stretch_signal(proj_vel)
+                sig_N = sig.size
+                """
+                Signals may be zero padded extra to ensure no wraparound
+                in the chirp z-transform, so make sure we have space
+                """
+                if sig_N > max_sig_N:
+                    max_sig_N = sig_N
+                stretched_sigs.append(sig)
+            stretch_sig_list.append(stretched_sigs)
         """
         Allocate array for spread signal
         """
-        tmin = np.min(delays)
         print('First arrival time', tmin)
+        spread = tmax - tmin
         print('spread', spread)
         min_N = int(spread/self.tdpulse.dt) + max_sig_N
         num_samples = min_N
-        rcvd_signal = np.zeros(num_samples, dtype=np.complex128)
+        rcvd_signal = np.zeros((nr, num_samples), dtype=np.complex128)
         t_grid = np.linspace(tmin, tmin+num_samples*self.tdpulse.dt, num_samples)
-        for j in range(num_arrivals):
-            arr = arrs[j]
-            delay = arr[1].real
-            ind = int((delay-tmin)/self.tdpulse.dt)
-            curr_sig = stretched_sigs[j]
-            rcvd_signal[ind:ind+curr_sig.size] += curr_sig
+        for i in range(nr):
+            arrs = arrivals[i]
+            stretched_sigs = stretch_sig_list[i]
+            num_arrivals = len(arrs)
+            for j in range(num_arrivals):
+                arr = arrs[j]
+                delay = arr[1].real
+                ind = int((delay-tmin)/self.tdpulse.dt)
+                curr_sig = stretched_sigs[j]
+                rcvd_signal[i,ind:ind+curr_sig.size] += curr_sig
         return t_grid, rcvd_signal
         
     def synthesize(self, folder, model, fname, freqs, inds):
